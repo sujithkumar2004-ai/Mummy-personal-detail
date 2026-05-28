@@ -7,6 +7,7 @@ type Detail = {
   name: string;
   dob: string;
   phone: string;
+  renewalDate: string;
   pdfName: string;
   pdfUrl: string;
 };
@@ -14,6 +15,79 @@ type Detail = {
 const LOGIN_ID = "SL001";
 const LOGIN_PASSWORD = "SL001@123";
 const PAGE_SIZE = 5;
+const MONTHS = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december"
+];
+
+function parseLocalDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function formatDisplayDate(value: string) {
+  if (!value) {
+    return "Not set";
+  }
+
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  }).format(parseLocalDate(value));
+}
+
+function getMonthName(value: string) {
+  if (!value) {
+    return "";
+  }
+
+  return MONTHS[parseLocalDate(value).getMonth()];
+}
+
+function getDaysUntilDate(value: string, repeatsEveryYear: boolean) {
+  if (!value) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const target = parseLocalDate(value);
+
+  if (repeatsEveryYear) {
+    target.setFullYear(today.getFullYear());
+
+    if (target < today) {
+      target.setFullYear(today.getFullYear() + 1);
+    }
+  }
+
+  target.setHours(0, 0, 0, 0);
+  return Math.ceil((target.getTime() - today.getTime()) / 86400000);
+}
+
+function getUpcomingLabel(days: number) {
+  if (days === 0) {
+    return "Today";
+  }
+
+  if (days === 1) {
+    return "Tomorrow";
+  }
+
+  return `${days} days`;
+}
 
 export default function Home() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -23,6 +97,7 @@ export default function Home() {
   const [name, setName] = useState("");
   const [dob, setDob] = useState("");
   const [phone, setPhone] = useState("");
+  const [renewalDate, setRenewalDate] = useState("");
   const [pdf, setPdf] = useState<File | null>(null);
   const [details, setDetails] = useState<Detail[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -42,12 +117,41 @@ export default function Home() {
     }
 
     return details.filter((detail) => {
+      const dobMonth = getMonthName(detail.dob);
+      const renewalMonth = getMonthName(detail.renewalDate);
+
       return (
         detail.name.toLowerCase().includes(query) ||
-        detail.phone.toLowerCase().includes(query)
+        detail.phone.toLowerCase().includes(query) ||
+        detail.dob.includes(query) ||
+        detail.renewalDate.includes(query) ||
+        dobMonth.includes(query) ||
+        dobMonth.slice(0, 3).includes(query) ||
+        renewalMonth.includes(query) ||
+        renewalMonth.slice(0, 3).includes(query)
       );
     });
   }, [details, search]);
+
+  const nextBirthday = useMemo(() => {
+    return details
+      .map((detail) => ({
+        detail,
+        days: getDaysUntilDate(detail.dob, true)
+      }))
+      .sort((first, second) => first.days - second.days)[0];
+  }, [details]);
+
+  const nextRenewal = useMemo(() => {
+    return details
+      .filter((detail) => detail.renewalDate)
+      .map((detail) => ({
+        detail,
+        days: getDaysUntilDate(detail.renewalDate, false)
+      }))
+      .filter((item) => item.days >= 0)
+      .sort((first, second) => first.days - second.days)[0];
+  }, [details]);
 
   const totalPages = Math.max(1, Math.ceil(filteredDetails.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -86,6 +190,7 @@ export default function Home() {
     setName("");
     setDob("");
     setPhone("");
+    setRenewalDate("");
     setPdf(null);
     setEditingId(null);
     setCurrentPdfName("");
@@ -98,7 +203,7 @@ export default function Home() {
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!name.trim() || !dob || !phone.trim() || (!pdf && !isEditing)) {
+    if (!name.trim() || !dob || !phone.trim() || !renewalDate || (!pdf && !isEditing)) {
       return;
     }
 
@@ -125,6 +230,7 @@ export default function Home() {
             name: name.trim(),
             dob,
             phone: phone.trim(),
+            renewalDate,
             pdfName: pdf?.name ?? detail.pdfName,
             pdfUrl: replacementPdfUrl || detail.pdfUrl
           };
@@ -147,6 +253,7 @@ export default function Home() {
         name: name.trim(),
         dob,
         phone: phone.trim(),
+        renewalDate,
         pdfName: pdf.name,
         pdfUrl
       },
@@ -161,6 +268,7 @@ export default function Home() {
     setName(detail.name);
     setDob(detail.dob);
     setPhone(detail.phone);
+    setRenewalDate(detail.renewalDate);
     setPdf(null);
     setCurrentPdfName(detail.pdfName);
 
@@ -226,8 +334,8 @@ export default function Home() {
       <header className="topbar">
         <div>
           <p className="eyebrow">Personal records</p>
-          <h1>Detail Planner</h1>
-          <p className="topbar-copy">Add, find, edit, and view uploaded PDFs in one place.</p>
+          <h1>Personal Detail Planner</h1>
+          <p className="topbar-copy">Track birthdays, renewals, phone numbers, and uploaded PDFs.</p>
         </div>
         <button className="logout-button" type="button" onClick={handleLogout}>
           Logout
@@ -247,6 +355,32 @@ export default function Home() {
           <span>PDF Files</span>
           <strong>{details.length}</strong>
         </div>
+      </section>
+
+      <section className="alert-grid" aria-label="Upcoming alerts">
+        <article className="alert-card birthday-card">
+          <div>
+            <p className="eyebrow">Upcoming birthday</p>
+            <h2>{nextBirthday ? nextBirthday.detail.name : "No birthdays yet"}</h2>
+            <span>
+              {nextBirthday
+                ? `${formatDisplayDate(nextBirthday.detail.dob)} - ${getUpcomingLabel(nextBirthday.days)}`
+                : "Add a DOB to see the nearest birthday."}
+            </span>
+          </div>
+        </article>
+
+        <article className="alert-card renewal-card">
+          <div>
+            <p className="eyebrow">Upcoming renewal</p>
+            <h2>{nextRenewal ? nextRenewal.detail.name : "No renewals yet"}</h2>
+            <span>
+              {nextRenewal
+                ? `${formatDisplayDate(nextRenewal.detail.renewalDate)} - ${getUpcomingLabel(nextRenewal.days)}`
+                : "Add a renewal date to see the nearest deadline."}
+            </span>
+          </div>
+        </article>
       </section>
 
       <section className="entry-panel" aria-label="Add or edit personal detail">
@@ -296,6 +430,16 @@ export default function Home() {
           </label>
 
           <label>
+            Renewal Date
+            <input
+              type="date"
+              value={renewalDate}
+              onChange={(event) => setRenewalDate(event.target.value)}
+              required
+            />
+          </label>
+
+          <label>
             Upload PDF
             <input
               ref={fileInputRef}
@@ -328,7 +472,8 @@ export default function Home() {
               type="search"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search name or number"
+              placeholder="Search name, phone, month, or renewal"
+              aria-label="Search by name, phone number, month, DOB, or renewal date"
             />
           </label>
         </div>
@@ -353,6 +498,7 @@ export default function Home() {
                     <th>Name</th>
                     <th>DOB</th>
                     <th>Phone Number</th>
+                    <th>Renewal Date</th>
                     <th>PDF</th>
                     <th>Action</th>
                   </tr>
@@ -364,8 +510,11 @@ export default function Home() {
                       <td>
                         <strong>{detail.name}</strong>
                       </td>
-                      <td>{detail.dob}</td>
+                      <td>{formatDisplayDate(detail.dob)}</td>
                       <td>{detail.phone}</td>
+                      <td>
+                        <span className="renewal-date">{formatDisplayDate(detail.renewalDate)}</span>
+                      </td>
                       <td>
                         <a
                           className="pdf-link"
