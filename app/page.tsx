@@ -104,8 +104,10 @@ export default function Home() {
   const [currentPdfName, setCurrentPdfName] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const pdfUrlsRef = useRef<Set<string>>(new Set());
 
   const isEditing = editingId !== null;
 
@@ -169,10 +171,30 @@ export default function Home() {
   }, [page, totalPages]);
 
   useEffect(() => {
-    return () => {
-      pdfUrlsRef.current.forEach((pdfUrl) => URL.revokeObjectURL(pdfUrl));
-    };
-  }, []);
+    if (isLoggedIn) {
+      void fetchDetails();
+    }
+  }, [isLoggedIn]);
+
+  async function fetchDetails() {
+    setIsLoading(true);
+    setStatusMessage("");
+
+    try {
+      const response = await fetch("/api/details", { cache: "no-store" });
+      const payload = (await response.json()) as { details?: Detail[]; error?: string };
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Unable to load details");
+      }
+
+      setDetails(payload.details || []);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Unable to load details");
+    } finally {
+      setIsLoading(false);
+    }
+  }
 
   function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -200,67 +222,36 @@ export default function Home() {
     }
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!name.trim() || !dob || !phone.trim() || !renewalDate || (!pdf && !isEditing)) {
+      setStatusMessage("Please fill all required fields and upload a PDF.");
       return;
     }
 
-    if (isEditing) {
-      const replacementPdfUrl = pdf ? URL.createObjectURL(pdf) : "";
+    setIsSaving(true);
+    setStatusMessage("");
 
-      if (replacementPdfUrl) {
-        pdfUrlsRef.current.add(replacementPdfUrl);
+    try {
+      const response = await fetch(isEditing ? `/api/details/${editingId}` : "/api/details", {
+        method: isEditing ? "PUT" : "POST",
+        body: buildFormData()
+      });
+      const payload = (await response.json()) as { detail?: Detail; error?: string };
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Unable to save detail");
       }
 
-      setDetails((currentDetails) =>
-        currentDetails.map((detail) => {
-          if (detail.id !== editingId) {
-            return detail;
-          }
-
-          if (pdf) {
-            URL.revokeObjectURL(detail.pdfUrl);
-            pdfUrlsRef.current.delete(detail.pdfUrl);
-          }
-
-          return {
-            ...detail,
-            name: name.trim(),
-            dob,
-            phone: phone.trim(),
-            renewalDate,
-            pdfName: pdf?.name ?? detail.pdfName,
-            pdfUrl: replacementPdfUrl || detail.pdfUrl
-          };
-        })
-      );
+      await fetchDetails();
       resetForm();
-      return;
+      setStatusMessage(isEditing ? "Detail updated in MySQL." : "Detail saved in MySQL.");
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Unable to save detail");
+    } finally {
+      setIsSaving(false);
     }
-
-    if (!pdf) {
-      return;
-    }
-
-    const pdfUrl = URL.createObjectURL(pdf);
-    pdfUrlsRef.current.add(pdfUrl);
-
-    setDetails((currentDetails) => [
-      {
-        id: Date.now(),
-        name: name.trim(),
-        dob,
-        phone: phone.trim(),
-        renewalDate,
-        pdfName: pdf.name,
-        pdfUrl
-      },
-      ...currentDetails
-    ]);
-
-    resetForm();
   }
 
   function startEdit(detail: Detail) {
@@ -283,7 +274,23 @@ export default function Home() {
     setIsLoggedIn(false);
     setLoginId("");
     setPassword("");
+    setDetails([]);
+    setStatusMessage("");
     resetForm();
+  }
+
+  function buildFormData() {
+    const formData = new FormData();
+    formData.append("name", name.trim());
+    formData.append("dob", dob);
+    formData.append("phone", phone.trim());
+    formData.append("renewalDate", renewalDate);
+
+    if (pdf) {
+      formData.append("pdf", pdf);
+    }
+
+    return formData;
   }
 
   if (!isLoggedIn) {
@@ -453,8 +460,12 @@ export default function Home() {
             ) : null}
           </label>
 
-          <button type="submit">{isEditing ? "Update" : "Add"}</button>
+          <button type="submit" disabled={isSaving}>
+            {isSaving ? "Saving" : isEditing ? "Update" : "Add"}
+          </button>
         </form>
+
+        {statusMessage ? <p className="status-message">{statusMessage}</p> : null}
       </section>
 
       <section className="records-section" aria-label="Saved records">
@@ -478,10 +489,15 @@ export default function Home() {
           </label>
         </div>
 
-        {details.length === 0 ? (
+        {isLoading ? (
+          <div className="empty-state">
+            <p>Loading saved details.</p>
+            <span>Fetching records from local MySQL.</span>
+          </div>
+        ) : details.length === 0 ? (
           <div className="empty-state">
             <p>No details added yet.</p>
-            <span>Your first entry will appear here after upload.</span>
+            <span>Your first entry will be saved in MySQL after upload.</span>
           </div>
         ) : filteredDetails.length === 0 ? (
           <div className="empty-state">
