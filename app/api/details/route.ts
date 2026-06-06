@@ -3,8 +3,8 @@ import { detailSelect, DetailRow, ensureSchema, getPool, serializeDetail } from 
 
 export const runtime = "nodejs";
 
-function getRequiredText(formData: FormData, key: string) {
-  const value = formData.get(key);
+function getRequiredText(payload: Record<string, unknown>, key: string) {
+  const value = payload[key];
 
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`${key} is required`);
@@ -12,25 +12,6 @@ function getRequiredText(formData: FormData, key: string) {
 
   return value.trim();
 }
-
-async function getPdfPayload(formData: FormData) {
-  const pdf = formData.get("pdf");
-
-  if (!(pdf instanceof File) || pdf.size === 0) {
-    throw new Error("pdf is required");
-  }
-
-  if (pdf.type && pdf.type !== "application/pdf") {
-    throw new Error("Only PDF uploads are supported");
-  }
-
-  return {
-    name: pdf.name,
-    type: pdf.type || "application/pdf",
-    data: Buffer.from(await pdf.arrayBuffer())
-  };
-}
-
 export async function GET() {
   try {
     await ensureSchema();
@@ -49,19 +30,21 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const formData = await request.formData();
-    const name = getRequiredText(formData, "name");
-    const dob = getRequiredText(formData, "dob");
-    const phone = getRequiredText(formData, "phone");
-    const renewalDate = getRequiredText(formData, "renewalDate");
-    const pdf = await getPdfPayload(formData);
+    const payload = (await request.json()) as Record<string, unknown>;
+    const name = getRequiredText(payload, "name");
+    const dob = getRequiredText(payload, "dob");
+    const phone = getRequiredText(payload, "phone");
+    const renewalDate = getRequiredText(payload, "renewalDate");
+    const pdfName = getRequiredText(payload, "pdfName");
+    const pdfType = getRequiredText(payload, "pdfType");
+    const pdfPath = getRequiredText(payload, "pdfPath");
     await ensureSchema();
     const pool = await getPool();
 
     const { rows } = await pool.query<DetailRow>(
       `
         INSERT INTO personal_details
-          (name, dob, phone, renewal_date, pdf_name, pdf_type, pdf_data)
+          (name, dob, phone, renewal_date, pdf_name, pdf_type, pdf_path)
         VALUES
           ($1, $2, $3, $4, $5, $6, $7)
         RETURNING
@@ -72,10 +55,11 @@ export async function POST(request: Request) {
           TO_CHAR(renewal_date, 'YYYY-MM-DD') AS renewal_date,
           pdf_name,
           pdf_type,
+          pdf_path,
           created_at,
           updated_at
       `,
-      [name, dob, phone, renewalDate, pdf.name, pdf.type, pdf.data]
+      [name, dob, phone, renewalDate, pdfName, pdfType, pdfPath]
     );
 
     return NextResponse.json({ detail: serializeDetail(rows[0]) }, { status: 201 });

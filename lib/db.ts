@@ -1,10 +1,17 @@
 import { Pool } from "pg";
 
-const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+const rawConnectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
 
-if (!connectionString) {
+if (!rawConnectionString) {
   throw new Error("POSTGRES_URL or DATABASE_URL is required");
 }
+
+const connectionUrl = new URL(rawConnectionString);
+connectionUrl.searchParams.delete("sslmode");
+connectionUrl.searchParams.delete("sslcert");
+connectionUrl.searchParams.delete("sslkey");
+connectionUrl.searchParams.delete("sslrootcert");
+const connectionString = connectionUrl.toString();
 
 let pool: Pool | null = null;
 let initialized = false;
@@ -17,6 +24,7 @@ export type DetailRow = {
   renewal_date: string;
   pdf_name: string;
   pdf_type: string;
+  pdf_path: string;
   created_at: Date;
   updated_at: Date;
 };
@@ -24,7 +32,7 @@ export type DetailRow = {
 export type PdfRow = {
   pdf_name: string;
   pdf_type: string;
-  pdf_data: Buffer;
+  pdf_path: string;
 };
 
 export function getPool() {
@@ -54,10 +62,14 @@ export async function ensureSchema() {
       renewal_date DATE NOT NULL,
       pdf_name VARCHAR(255) NOT NULL,
       pdf_type VARCHAR(120) NOT NULL,
-      pdf_data BYTEA NOT NULL,
+      pdf_path TEXT,
+      pdf_data BYTEA,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    ALTER TABLE personal_details ADD COLUMN IF NOT EXISTS pdf_path TEXT;
+    ALTER TABLE personal_details ALTER COLUMN pdf_data DROP NOT NULL;
 
     CREATE INDEX IF NOT EXISTS idx_personal_details_name ON personal_details (name);
     CREATE INDEX IF NOT EXISTS idx_personal_details_phone ON personal_details (phone);
@@ -77,6 +89,7 @@ export const detailSelect = `
     TO_CHAR(renewal_date, 'YYYY-MM-DD') AS renewal_date,
     pdf_name,
     pdf_type,
+    pdf_path,
     created_at,
     updated_at
   FROM personal_details

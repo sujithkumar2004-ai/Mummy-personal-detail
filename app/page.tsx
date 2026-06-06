@@ -1,5 +1,6 @@
 "use client";
 
+import { createClient } from "@supabase/supabase-js";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Detail = {
@@ -15,6 +16,7 @@ type Detail = {
 const LOGIN_ID = "SL001";
 const LOGIN_PASSWORD = "SL001@123";
 const PAGE_SIZE = 5;
+const PDF_BUCKET = "personal-detail-pdfs";
 const MONTHS = [
   "january",
   "february",
@@ -29,6 +31,12 @@ const MONTHS = [
   "november",
   "december"
 ];
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+const supabase =
+  supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 function parseLocalDate(value: string) {
   const [year, month, day] = value.split("-").map(Number);
@@ -234,9 +242,24 @@ export default function Home() {
     setStatusMessage("");
 
     try {
+      let uploadedPdf:
+        | {
+            pdfName: string;
+            pdfType: string;
+            pdfPath: string;
+          }
+        | null = null;
+
+      if (pdf) {
+        uploadedPdf = await uploadPdfToSupabase(pdf);
+      }
+
       const response = await fetch(isEditing ? `/api/details/${editingId}` : "/api/details", {
         method: isEditing ? "PUT" : "POST",
-        body: buildFormData()
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(buildPayload(uploadedPdf))
       });
       const payload = (await response.json()) as { detail?: Detail; error?: string };
 
@@ -246,7 +269,7 @@ export default function Home() {
 
       await fetchDetails();
       resetForm();
-      setStatusMessage(isEditing ? "Detail updated in MySQL." : "Detail saved in MySQL.");
+      setStatusMessage(isEditing ? "Detail updated in Supabase." : "Detail saved in Supabase.");
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "Unable to save detail");
     } finally {
@@ -279,18 +302,60 @@ export default function Home() {
     resetForm();
   }
 
-  function buildFormData() {
-    const formData = new FormData();
-    formData.append("name", name.trim());
-    formData.append("dob", dob);
-    formData.append("phone", phone.trim());
-    formData.append("renewalDate", renewalDate);
+  function buildPayload(
+    uploadedPdf: {
+      pdfName: string;
+      pdfType: string;
+      pdfPath: string;
+    } | null
+  ) {
+    return {
+      name: name.trim(),
+      dob,
+      phone: phone.trim(),
+      renewalDate,
+      ...(uploadedPdf || {})
+    };
+  }
 
-    if (pdf) {
-      formData.append("pdf", pdf);
+  async function uploadPdfToSupabase(file: File) {
+    if (!supabase) {
+      throw new Error("Supabase browser client is not configured");
     }
 
-    return formData;
+    const response = await fetch("/api/uploads/signed", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        fileName: file.name,
+        contentType: file.type || "application/pdf"
+      })
+    });
+    const payload = (await response.json()) as {
+      path?: string;
+      token?: string;
+      error?: string;
+    };
+
+    if (!response.ok || !payload.path || !payload.token) {
+      throw new Error(payload.error || "Unable to prepare PDF upload");
+    }
+
+    const { error } = await supabase.storage
+      .from(PDF_BUCKET)
+      .uploadToSignedUrl(payload.path, payload.token, file);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return {
+      pdfName: file.name,
+      pdfType: file.type || "application/pdf",
+      pdfPath: payload.path
+    };
   }
 
   if (!isLoggedIn) {
@@ -497,7 +562,7 @@ export default function Home() {
         ) : details.length === 0 ? (
           <div className="empty-state">
             <p>No details added yet.</p>
-            <span>Your first entry will be saved in MySQL after upload.</span>
+            <span>Your first entry will be saved in Supabase after upload.</span>
           </div>
         ) : filteredDetails.length === 0 ? (
           <div className="empty-state">

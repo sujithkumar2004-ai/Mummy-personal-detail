@@ -7,8 +7,8 @@ type RouteContext = {
   params: Promise<{ id: string }>;
 };
 
-function getRequiredText(formData: FormData, key: string) {
-  const value = formData.get(key);
+function getRequiredText(payload: Record<string, unknown>, key: string) {
+  const value = payload[key];
 
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`${key} is required`);
@@ -17,38 +17,22 @@ function getRequiredText(formData: FormData, key: string) {
   return value.trim();
 }
 
-async function getOptionalPdfPayload(formData: FormData) {
-  const pdf = formData.get("pdf");
-
-  if (!(pdf instanceof File) || pdf.size === 0) {
-    return null;
-  }
-
-  if (pdf.type && pdf.type !== "application/pdf") {
-    throw new Error("Only PDF uploads are supported");
-  }
-
-  return {
-    name: pdf.name,
-    type: pdf.type || "application/pdf",
-    data: Buffer.from(await pdf.arrayBuffer())
-  };
-}
-
 export async function PUT(request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
-    const formData = await request.formData();
-    const name = getRequiredText(formData, "name");
-    const dob = getRequiredText(formData, "dob");
-    const phone = getRequiredText(formData, "phone");
-    const renewalDate = getRequiredText(formData, "renewalDate");
-    const pdf = await getOptionalPdfPayload(formData);
+    const payload = (await request.json()) as Record<string, unknown>;
+    const name = getRequiredText(payload, "name");
+    const dob = getRequiredText(payload, "dob");
+    const phone = getRequiredText(payload, "phone");
+    const renewalDate = getRequiredText(payload, "renewalDate");
+    const pdfName = typeof payload.pdfName === "string" ? payload.pdfName.trim() : "";
+    const pdfType = typeof payload.pdfType === "string" ? payload.pdfType.trim() : "";
+    const pdfPath = typeof payload.pdfPath === "string" ? payload.pdfPath.trim() : "";
     await ensureSchema();
     const pool = await getPool();
     let rows: DetailRow[];
 
-    if (pdf) {
+    if (pdfPath) {
       ({ rows } = await pool.query<DetailRow>(
         `
           UPDATE personal_details
@@ -59,7 +43,7 @@ export async function PUT(request: Request, context: RouteContext) {
             renewal_date = $4,
             pdf_name = $5,
             pdf_type = $6,
-            pdf_data = $7,
+            pdf_path = $7,
             updated_at = NOW()
           WHERE id = $8
           RETURNING
@@ -70,10 +54,11 @@ export async function PUT(request: Request, context: RouteContext) {
             TO_CHAR(renewal_date, 'YYYY-MM-DD') AS renewal_date,
             pdf_name,
             pdf_type,
+            pdf_path,
             created_at,
             updated_at
         `,
-        [name, dob, phone, renewalDate, pdf.name, pdf.type, pdf.data, id]
+        [name, dob, phone, renewalDate, pdfName, pdfType || "application/pdf", pdfPath, id]
       ));
     } else {
       ({ rows } = await pool.query<DetailRow>(
@@ -94,6 +79,7 @@ export async function PUT(request: Request, context: RouteContext) {
             TO_CHAR(renewal_date, 'YYYY-MM-DD') AS renewal_date,
             pdf_name,
             pdf_type,
+            pdf_path,
             created_at,
             updated_at
         `,

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ensureSchema, getPool, PdfRow } from "@/lib/db";
+import { PDF_BUCKET, supabaseAdmin } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 
@@ -13,7 +14,7 @@ export async function GET(_request: Request, context: RouteContext) {
     await ensureSchema();
     const pool = await getPool();
     const { rows } = await pool.query<PdfRow>(
-      "SELECT pdf_name, pdf_type, pdf_data FROM personal_details WHERE id = $1",
+      "SELECT pdf_name, pdf_type, pdf_path FROM personal_details WHERE id = $1",
       [id]
     );
 
@@ -23,14 +24,15 @@ export async function GET(_request: Request, context: RouteContext) {
       return NextResponse.json({ error: "PDF not found" }, { status: 404 });
     }
 
-    const body = new Uint8Array(pdf.pdf_data);
+    const { data, error } = await supabaseAdmin.storage
+      .from(PDF_BUCKET)
+      .createSignedUrl(pdf.pdf_path, 60);
 
-    return new Response(body, {
-      headers: {
-        "Content-Type": pdf.pdf_type || "application/pdf",
-        "Content-Disposition": `inline; filename="${encodeURIComponent(pdf.pdf_name)}"`
-      }
-    });
+    if (error) {
+      throw error;
+    }
+
+    return NextResponse.redirect(data.signedUrl);
   } catch (error) {
     console.error(error);
     return NextResponse.json({ error: "Unable to load PDF" }, { status: 500 });
