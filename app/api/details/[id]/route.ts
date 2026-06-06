@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
-import type { RowDataPacket } from "mysql2";
-import { DetailRow, getPool, serializeDetail } from "@/lib/db";
+import { DetailRow, ensureSchema, getPool, serializeDetail } from "@/lib/db";
 
 export const runtime = "nodejs";
-
-type DetailPacket = DetailRow & RowDataPacket;
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -47,45 +44,62 @@ export async function PUT(request: Request, context: RouteContext) {
     const phone = getRequiredText(formData, "phone");
     const renewalDate = getRequiredText(formData, "renewalDate");
     const pdf = await getOptionalPdfPayload(formData);
+    await ensureSchema();
     const pool = await getPool();
+    let rows: DetailRow[];
 
     if (pdf) {
-      await pool.execute(
+      ({ rows } = await pool.query<DetailRow>(
         `
           UPDATE personal_details
-          SET name = ?, dob = ?, phone = ?, renewal_date = ?, pdf_name = ?, pdf_type = ?, pdf_data = ?
-          WHERE id = ?
+          SET
+            name = $1,
+            dob = $2,
+            phone = $3,
+            renewal_date = $4,
+            pdf_name = $5,
+            pdf_type = $6,
+            pdf_data = $7,
+            updated_at = NOW()
+          WHERE id = $8
+          RETURNING
+            id,
+            name,
+            TO_CHAR(dob, 'YYYY-MM-DD') AS dob,
+            phone,
+            TO_CHAR(renewal_date, 'YYYY-MM-DD') AS renewal_date,
+            pdf_name,
+            pdf_type,
+            created_at,
+            updated_at
         `,
         [name, dob, phone, renewalDate, pdf.name, pdf.type, pdf.data, id]
-      );
+      ));
     } else {
-      await pool.execute(
+      ({ rows } = await pool.query<DetailRow>(
         `
           UPDATE personal_details
-          SET name = ?, dob = ?, phone = ?, renewal_date = ?
-          WHERE id = ?
+          SET
+            name = $1,
+            dob = $2,
+            phone = $3,
+            renewal_date = $4,
+            updated_at = NOW()
+          WHERE id = $5
+          RETURNING
+            id,
+            name,
+            TO_CHAR(dob, 'YYYY-MM-DD') AS dob,
+            phone,
+            TO_CHAR(renewal_date, 'YYYY-MM-DD') AS renewal_date,
+            pdf_name,
+            pdf_type,
+            created_at,
+            updated_at
         `,
         [name, dob, phone, renewalDate, id]
-      );
+      ));
     }
-
-    const [rows] = await pool.query<DetailPacket[]>(
-      `
-        SELECT
-          id,
-          name,
-          DATE_FORMAT(dob, '%Y-%m-%d') AS dob,
-          phone,
-          DATE_FORMAT(renewal_date, '%Y-%m-%d') AS renewal_date,
-          pdf_name,
-          pdf_type,
-          created_at,
-          updated_at
-        FROM personal_details
-        WHERE id = ?
-      `,
-      [id]
-    );
 
     if (!rows[0]) {
       return NextResponse.json({ error: "Detail not found" }, { status: 404 });

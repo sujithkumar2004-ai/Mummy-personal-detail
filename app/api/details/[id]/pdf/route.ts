@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
-import type { RowDataPacket } from "mysql2";
-import { getPool, PdfRow } from "@/lib/db";
+import { ensureSchema, getPool, PdfRow } from "@/lib/db";
 
 export const runtime = "nodejs";
-
-type PdfPacket = PdfRow & RowDataPacket;
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -13,9 +10,10 @@ type RouteContext = {
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
+    await ensureSchema();
     const pool = await getPool();
-    const [rows] = await pool.query<PdfPacket[]>(
-      "SELECT pdf_name, pdf_type, pdf_data FROM personal_details WHERE id = ?",
+    const { rows } = await pool.query<PdfRow>(
+      "SELECT pdf_name, pdf_type, pdf_data FROM personal_details WHERE id = $1",
       [id]
     );
 
