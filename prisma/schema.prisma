@@ -1,0 +1,26 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model SavedNumber {
+  id               Int      @id @default(autoincrement())
+  name             String   @db.VarChar(191)
+  phoneNumber      String   @db.VarChar(64)
+  registrationDate DateTime
+  insuranceDate    DateTime
+  birthday         DateTime
+  notes            String?  @db.Text
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([name])
+  @@index([phoneNumber])
+  @@index([registrationDate])
+  @@index([insuranceDate])
+  @@index([birthday])
+}

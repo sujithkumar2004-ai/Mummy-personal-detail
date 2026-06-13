@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Personal Detail Planner",
-  description: "Frontend-only personal detail planner with PDF uploads"
+  title: "Number Saving Platform",
+  description: "Professional Next.js and Prisma number registry backed by MySQL"
 };
 
 export default function RootLayout({

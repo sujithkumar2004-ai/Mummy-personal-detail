@@ -1,42 +1,38 @@
 "use client";
 
-import { createClient } from "@supabase/supabase-js";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
-type Detail = {
+type SavedNumber = {
   id: number;
   name: string;
-  dob: string;
-  phone: string;
-  renewalDate: string;
-  pdfName: string;
-  pdfUrl: string;
+  phoneNumber: string;
+  registrationDate: string;
+  insuranceDate: string;
+  birthday: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type Pagination = {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
 };
 
 const LOGIN_ID = "SL001";
 const LOGIN_PASSWORD = "SL001@123";
-const PAGE_SIZE = 5;
-const PDF_BUCKET = "personal-detail-pdfs";
-const MONTHS = [
-  "january",
-  "february",
-  "march",
-  "april",
-  "may",
-  "june",
-  "july",
-  "august",
-  "september",
-  "october",
-  "november",
-  "december"
-];
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-const supabase =
-  supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
+const PAGE_SIZE = 8;
+const emptyPagination: Pagination = { page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 1 };
+const initialForm = {
+  name: "",
+  phoneNumber: "",
+  registrationDate: "",
+  insuranceDate: "",
+  birthday: "",
+  notes: ""
+};
 
 function parseLocalDate(value: string) {
   const [year, month, day] = value.split("-").map(Number);
@@ -55,25 +51,16 @@ function formatDisplayDate(value: string) {
   }).format(parseLocalDate(value));
 }
 
-function getMonthName(value: string) {
-  if (!value) {
-    return "";
-  }
-
-  return MONTHS[parseLocalDate(value).getMonth()];
-}
-
-function getDaysUntilDate(value: string, repeatsEveryYear: boolean) {
+function daysUntil(value: string, yearly: boolean) {
   if (!value) {
     return Number.POSITIVE_INFINITY;
   }
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-
   const target = parseLocalDate(value);
 
-  if (repeatsEveryYear) {
+  if (yearly) {
     target.setFullYear(today.getFullYear());
 
     if (target < today) {
@@ -85,7 +72,7 @@ function getDaysUntilDate(value: string, repeatsEveryYear: boolean) {
   return Math.ceil((target.getTime() - today.getTime()) / 86400000);
 }
 
-function getUpcomingLabel(days: number) {
+function urgencyLabel(days: number) {
   if (days === 0) {
     return "Today";
   }
@@ -97,108 +84,96 @@ function getUpcomingLabel(days: number) {
   return `${days} days`;
 }
 
+function normalizePhone(value: string) {
+  return value.replace(/[^0-9+]/g, "");
+}
+
 export default function Home() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [loginId, setLoginId] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
-  const [name, setName] = useState("");
-  const [dob, setDob] = useState("");
-  const [phone, setPhone] = useState("");
-  const [renewalDate, setRenewalDate] = useState("");
-  const [pdf, setPdf] = useState<File | null>(null);
-  const [details, setDetails] = useState<Detail[]>([]);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [currentPdfName, setCurrentPdfName] = useState("");
+  const [form, setForm] = useState(initialForm);
+  const [records, setRecords] = useState<SavedNumber[]>([]);
+  const [pagination, setPagination] = useState<Pagination>(emptyPagination);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isEditing = editingId !== null;
 
-  const filteredDetails = useMemo(() => {
-    const query = search.trim().toLowerCase();
-
-    if (!query) {
-      return details;
-    }
-
-    return details.filter((detail) => {
-      const dobMonth = getMonthName(detail.dob);
-      const renewalMonth = getMonthName(detail.renewalDate);
-
-      return (
-        detail.name.toLowerCase().includes(query) ||
-        detail.phone.toLowerCase().includes(query) ||
-        detail.dob.includes(query) ||
-        detail.renewalDate.includes(query) ||
-        dobMonth.includes(query) ||
-        dobMonth.slice(0, 3).includes(query) ||
-        renewalMonth.includes(query) ||
-        renewalMonth.slice(0, 3).includes(query)
-      );
-    });
-  }, [details, search]);
-
   const nextBirthday = useMemo(() => {
-    return details
-      .map((detail) => ({
-        detail,
-        days: getDaysUntilDate(detail.dob, true)
-      }))
+    return [...records]
+      .map((record) => ({ record, days: daysUntil(record.birthday, true) }))
       .sort((first, second) => first.days - second.days)[0];
-  }, [details]);
+  }, [records]);
 
-  const nextRenewal = useMemo(() => {
-    return details
-      .filter((detail) => detail.renewalDate)
-      .map((detail) => ({
-        detail,
-        days: getDaysUntilDate(detail.renewalDate, false)
-      }))
+  const nextInsurance = useMemo(() => {
+    return [...records]
+      .map((record) => ({ record, days: daysUntil(record.insuranceDate, false) }))
       .filter((item) => item.days >= 0)
       .sort((first, second) => first.days - second.days)[0];
-  }, [details]);
+  }, [records]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredDetails.length / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages);
-  const pageStart = (safePage - 1) * PAGE_SIZE;
-  const visibleDetails = filteredDetails.slice(pageStart, pageStart + PAGE_SIZE);
+  const nextRegistration = useMemo(() => {
+    return [...records]
+      .map((record) => ({ record, days: daysUntil(record.registrationDate, false) }))
+      .filter((item) => item.days >= 0)
+      .sort((first, second) => first.days - second.days)[0];
+  }, [records]);
+
+  useEffect(() => {
+    if (!isLoggedIn) {
+      return;
+    }
+
+    const handle = window.setTimeout(() => {
+      void fetchRecords(page, search);
+    }, 220);
+
+    return () => window.clearTimeout(handle);
+  }, [isLoggedIn, page, search]);
 
   useEffect(() => {
     setPage(1);
   }, [search]);
 
-  useEffect(() => {
-    if (page > totalPages) {
-      setPage(totalPages);
-    }
-  }, [page, totalPages]);
+  function updateField(key: keyof typeof initialForm, value: string) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
 
-  useEffect(() => {
-    if (isLoggedIn) {
-      void fetchDetails();
-    }
-  }, [isLoggedIn]);
-
-  async function fetchDetails() {
+  async function fetchRecords(nextPage = page, nextSearch = search) {
     setIsLoading(true);
     setStatusMessage("");
 
     try {
-      const response = await fetch("/api/details", { cache: "no-store" });
-      const payload = (await response.json()) as { details?: Detail[]; error?: string };
+      const params = new URLSearchParams({
+        page: String(nextPage),
+        pageSize: String(PAGE_SIZE)
+      });
 
-      if (!response.ok) {
-        throw new Error(payload.error || "Unable to load details");
+      if (nextSearch.trim()) {
+        params.set("search", nextSearch.trim());
       }
 
-      setDetails(payload.details || []);
+      const response = await fetch(`/api/contacts?${params.toString()}`, { cache: "no-store" });
+      const payload = (await response.json()) as {
+        records?: SavedNumber[];
+        pagination?: Pagination;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Unable to load saved numbers");
+      }
+
+      setRecords(payload.records || []);
+      setPagination(payload.pagination || emptyPagination);
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : "Unable to load details");
+      setStatusMessage(error instanceof Error ? error.message : "Unable to load saved numbers");
     } finally {
       setIsLoading(false);
     }
@@ -217,24 +192,15 @@ export default function Home() {
   }
 
   function resetForm() {
-    setName("");
-    setDob("");
-    setPhone("");
-    setRenewalDate("");
-    setPdf(null);
+    setForm(initialForm);
     setEditingId(null);
-    setCurrentPdfName("");
-
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!name.trim() || !dob || !phone.trim() || !renewalDate || (!pdf && !isEditing)) {
-      setStatusMessage("Please fill all required fields and upload a PDF.");
+    if (!form.name.trim() || !form.phoneNumber.trim() || !form.registrationDate || !form.insuranceDate || !form.birthday) {
+      setStatusMessage("Please fill name, number, registration, insurance, and birthday.");
       return;
     }
 
@@ -242,158 +208,102 @@ export default function Home() {
     setStatusMessage("");
 
     try {
-      let uploadedPdf:
-        | {
-            pdfName: string;
-            pdfType: string;
-            pdfPath: string;
-          }
-        | null = null;
-
-      if (pdf) {
-        uploadedPdf = await uploadPdfToSupabase(pdf);
-      }
-
-      const response = await fetch(isEditing ? `/api/details/${editingId}` : "/api/details", {
+      const response = await fetch(isEditing ? `/api/contacts/${editingId}` : "/api/contacts", {
         method: isEditing ? "PUT" : "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(buildPayload(uploadedPdf))
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...form,
+          phoneNumber: normalizePhone(form.phoneNumber)
+        })
       });
-      const payload = (await response.json()) as { detail?: Detail; error?: string };
+      const payload = (await response.json()) as { record?: SavedNumber; error?: string };
 
       if (!response.ok) {
-        throw new Error(payload.error || "Unable to save detail");
+        throw new Error(payload.error || "Unable to save number");
       }
 
-      await fetchDetails();
       resetForm();
-      setStatusMessage(isEditing ? "Detail updated in Supabase." : "Detail saved in Supabase.");
+      await fetchRecords(isEditing ? page : 1, search);
+      setPage(isEditing ? page : 1);
+      setStatusMessage(isEditing ? "Number updated in MySQL." : "Number saved in MySQL.");
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : "Unable to save detail");
+      setStatusMessage(error instanceof Error ? error.message : "Unable to save number");
     } finally {
       setIsSaving(false);
     }
   }
 
-  function startEdit(detail: Detail) {
-    setEditingId(detail.id);
-    setName(detail.name);
-    setDob(detail.dob);
-    setPhone(detail.phone);
-    setRenewalDate(detail.renewalDate);
-    setPdf(null);
-    setCurrentPdfName(detail.pdfName);
+  function startEdit(record: SavedNumber) {
+    setEditingId(record.id);
+    setForm({
+      name: record.name,
+      phoneNumber: record.phoneNumber,
+      registrationDate: record.registrationDate,
+      insuranceDate: record.insuranceDate,
+      birthday: record.birthday,
+      notes: record.notes
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
+  async function deleteRecord(record: SavedNumber) {
+    const confirmed = window.confirm(`Delete ${record.name}'s saved number?`);
+
+    if (!confirmed) {
+      return;
     }
 
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    setStatusMessage("");
+
+    try {
+      const response = await fetch(`/api/contacts/${record.id}`, { method: "DELETE" });
+      const payload = (await response.json()) as { error?: string };
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Unable to delete record");
+      }
+
+      await fetchRecords(page, search);
+      setStatusMessage("Record deleted from MySQL.");
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Unable to delete record");
+    }
   }
 
   function handleLogout() {
     setIsLoggedIn(false);
     setLoginId("");
     setPassword("");
-    setDetails([]);
+    setRecords([]);
+    setPagination(emptyPagination);
+    setSearch("");
     setStatusMessage("");
     resetForm();
-  }
-
-  function buildPayload(
-    uploadedPdf: {
-      pdfName: string;
-      pdfType: string;
-      pdfPath: string;
-    } | null
-  ) {
-    return {
-      name: name.trim(),
-      dob,
-      phone: phone.trim(),
-      renewalDate,
-      ...(uploadedPdf || {})
-    };
-  }
-
-  async function uploadPdfToSupabase(file: File) {
-    if (!supabase) {
-      throw new Error("Supabase browser client is not configured");
-    }
-
-    const response = await fetch("/api/uploads/signed", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        fileName: file.name,
-        contentType: file.type || "application/pdf"
-      })
-    });
-    const payload = (await response.json()) as {
-      path?: string;
-      token?: string;
-      error?: string;
-    };
-
-    if (!response.ok || !payload.path || !payload.token) {
-      throw new Error(payload.error || "Unable to prepare PDF upload");
-    }
-
-    const { error } = await supabase.storage
-      .from(PDF_BUCKET)
-      .uploadToSignedUrl(payload.path, payload.token, file);
-
-    if (error) {
-      throw new Error(error.message);
-    }
-
-    return {
-      pdfName: file.name,
-      pdfType: file.type || "application/pdf",
-      pdfPath: payload.path
-    };
   }
 
   if (!isLoggedIn) {
     return (
       <main className="login-page">
         <section className="login-panel" aria-label="Login">
-          <div className="brand-mark">SL</div>
-          <div>
-            <p className="eyebrow">Secure entry</p>
-            <h1>Personal Detail Planner</h1>
-            <p className="subtext">Sign in to manage detail records and uploaded PDFs.</p>
+          <div className="brand-row">
+            <div className="brand-mark">NS</div>
+            <div>
+              <p className="eyebrow">Secure access</p>
+              <h1>Number Saving Platform</h1>
+            </div>
           </div>
+          <p className="subtext">Sign in to manage saved numbers, registration dates, insurance dates, and birthdays.</p>
 
           <form className="login-form" onSubmit={handleLogin}>
             <label>
               Login ID
-              <input
-                type="text"
-                value={loginId}
-                onChange={(event) => setLoginId(event.target.value)}
-                placeholder="Enter login ID"
-                autoComplete="username"
-              />
+              <input value={loginId} onChange={(event) => setLoginId(event.target.value)} placeholder="Enter login ID" autoComplete="username" />
             </label>
-
             <label>
               Password
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="Enter password"
-                autoComplete="current-password"
-              />
+              <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter password" autoComplete="current-password" />
             </label>
-
             {loginError ? <p className="error">{loginError}</p> : null}
-
             <button type="submit">Login</button>
           </form>
         </section>
@@ -405,170 +315,75 @@ export default function Home() {
     <main className="app-page">
       <header className="topbar">
         <div>
-          <p className="eyebrow">Personal records</p>
-          <h1>Personal Detail Planner</h1>
-          <p className="topbar-copy">Track birthdays, renewals, phone numbers, and uploaded PDFs.</p>
+          <p className="eyebrow">MySQL backed registry</p>
+          <h1>Number Saving Platform</h1>
+          <p className="topbar-copy">Save every number with registration, insurance, birthday, notes, search, edit, delete, and pagination.</p>
         </div>
-        <button className="logout-button" type="button" onClick={handleLogout}>
-          Logout
-        </button>
+        <button className="logout-button" type="button" onClick={handleLogout}>Logout</button>
       </header>
 
       <section className="summary-grid" aria-label="Record summary">
-        <div>
-          <span>Total Records</span>
-          <strong>{details.length}</strong>
-        </div>
-        <div>
-          <span>Showing</span>
-          <strong>{filteredDetails.length}</strong>
-        </div>
-        <div>
-          <span>PDF Files</span>
-          <strong>{details.length}</strong>
-        </div>
+        <div><span>Total saved</span><strong>{pagination.total}</strong></div>
+        <div><span>Current page</span><strong>{pagination.page}</strong></div>
+        <div><span>Visible rows</span><strong>{records.length}</strong></div>
       </section>
 
-      <section className="alert-grid" aria-label="Upcoming alerts">
+      <section className="alert-grid" aria-label="Upcoming dates">
         <article className="alert-card birthday-card">
-          <div>
-            <p className="eyebrow">Upcoming birthday</p>
-            <h2>{nextBirthday ? nextBirthday.detail.name : "No birthdays yet"}</h2>
-            <span>
-              {nextBirthday
-                ? `${formatDisplayDate(nextBirthday.detail.dob)} - ${getUpcomingLabel(nextBirthday.days)}`
-                : "Add a DOB to see the nearest birthday."}
-            </span>
-          </div>
+          <p className="eyebrow">Upcoming birthday</p>
+          <h2>{nextBirthday ? nextBirthday.record.name : "No birthdays yet"}</h2>
+          <span>{nextBirthday ? `${formatDisplayDate(nextBirthday.record.birthday)} - ${urgencyLabel(nextBirthday.days)}` : "Add birthdays to track the next one."}</span>
         </article>
-
-        <article className="alert-card renewal-card">
-          <div>
-            <p className="eyebrow">Upcoming renewal</p>
-            <h2>{nextRenewal ? nextRenewal.detail.name : "No renewals yet"}</h2>
-            <span>
-              {nextRenewal
-                ? `${formatDisplayDate(nextRenewal.detail.renewalDate)} - ${getUpcomingLabel(nextRenewal.days)}`
-                : "Add a renewal date to see the nearest deadline."}
-            </span>
-          </div>
+        <article className="alert-card insurance-card">
+          <p className="eyebrow">Insurance due</p>
+          <h2>{nextInsurance ? nextInsurance.record.name : "No insurance dates"}</h2>
+          <span>{nextInsurance ? `${formatDisplayDate(nextInsurance.record.insuranceDate)} - ${urgencyLabel(nextInsurance.days)}` : "Add insurance dates to see upcoming renewals."}</span>
+        </article>
+        <article className="alert-card registration-card">
+          <p className="eyebrow">Registration due</p>
+          <h2>{nextRegistration ? nextRegistration.record.name : "No registration dates"}</h2>
+          <span>{nextRegistration ? `${formatDisplayDate(nextRegistration.record.registrationDate)} - ${urgencyLabel(nextRegistration.days)}` : "Add registration dates to watch deadlines."}</span>
         </article>
       </section>
 
-      <section className="entry-panel" aria-label="Add or edit personal detail">
+      <section className="entry-panel" aria-label="Add or edit saved number">
         <div className="panel-title">
           <div>
-            <p className="eyebrow">{isEditing ? "Edit entry" : "New entry"}</p>
-            <h2>{isEditing ? "Update Personal Detail" : "Add Personal Detail"}</h2>
+            <p className="eyebrow">{isEditing ? "Editing record" : "New record"}</p>
+            <h2>{isEditing ? "Update Saved Number" : "Add Saved Number"}</h2>
           </div>
-          {isEditing ? (
-            <button className="ghost-button" type="button" onClick={resetForm}>
-              Cancel Edit
-            </button>
-          ) : null}
+          {isEditing ? <button className="ghost-button" type="button" onClick={resetForm}>Cancel Edit</button> : null}
         </div>
 
-        <form className="detail-form" onSubmit={handleSubmit}>
-          <label>
-            Name
-            <input
-              type="text"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="Full name"
-              required
-            />
-          </label>
-
-          <label>
-            DOB
-            <input
-              type="date"
-              value={dob}
-              onChange={(event) => setDob(event.target.value)}
-              required
-            />
-          </label>
-
-          <label>
-            Phone Number
-            <input
-              type="tel"
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              placeholder="Phone number"
-              required
-            />
-          </label>
-
-          <label>
-            Renewal Date
-            <input
-              type="date"
-              value={renewalDate}
-              onChange={(event) => setRenewalDate(event.target.value)}
-              required
-            />
-          </label>
-
-          <label>
-            Upload PDF
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="application/pdf,.pdf"
-              onChange={(event) => setPdf(event.target.files?.[0] ?? null)}
-              required={!isEditing}
-            />
-            {isEditing && currentPdfName ? (
-              <span className="field-note">Current file: {currentPdfName}</span>
-            ) : null}
-          </label>
-
-          <button type="submit" disabled={isSaving}>
-            {isSaving ? "Saving" : isEditing ? "Update" : "Add"}
-          </button>
+        <form className="number-form" onSubmit={handleSubmit}>
+          <label>Name<input value={form.name} onChange={(event) => updateField("name", event.target.value)} placeholder="Full name" required /></label>
+          <label>Number<input type="tel" value={form.phoneNumber} onChange={(event) => updateField("phoneNumber", event.target.value)} placeholder="Phone number" required /></label>
+          <label>Registration Date<input type="date" value={form.registrationDate} onChange={(event) => updateField("registrationDate", event.target.value)} required /></label>
+          <label>Insurance Date<input type="date" value={form.insuranceDate} onChange={(event) => updateField("insuranceDate", event.target.value)} required /></label>
+          <label>Birthday<input type="date" value={form.birthday} onChange={(event) => updateField("birthday", event.target.value)} required /></label>
+          <label className="notes-field">Notes<input value={form.notes} onChange={(event) => updateField("notes", event.target.value)} placeholder="Vehicle, policy, or reminder note" /></label>
+          <button type="submit" disabled={isSaving}>{isSaving ? "Saving" : isEditing ? "Update" : "Save"}</button>
         </form>
 
         {statusMessage ? <p className="status-message">{statusMessage}</p> : null}
       </section>
 
-      <section className="records-section" aria-label="Saved records">
+      <section className="records-section" aria-label="Saved numbers">
         <div className="records-header">
           <div>
-            <h2>Saved Details</h2>
-            <span>
-              {filteredDetails.length} of {details.length} records
-            </span>
+            <h2>Saved Numbers</h2>
+            <span>{pagination.total} records in MySQL</span>
           </div>
-
           <label className="search-field">
             <span>Search</span>
-            <input
-              type="search"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search name, phone, month, or renewal"
-              aria-label="Search by name, phone number, month, DOB, or renewal date"
-            />
+            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, number, or notes" aria-label="Search saved numbers" />
           </label>
         </div>
 
         {isLoading ? (
-          <div className="empty-state">
-            <p>Loading saved details.</p>
-            <span>Fetching records from local MySQL.</span>
-          </div>
-        ) : details.length === 0 ? (
-          <div className="empty-state">
-            <p>No details added yet.</p>
-            <span>Your first entry will be saved in Supabase after upload.</span>
-          </div>
-        ) : filteredDetails.length === 0 ? (
-          <div className="empty-state">
-            <p>No matching records.</p>
-            <span>Try searching by another name or phone number.</span>
-          </div>
+          <div className="empty-state"><p>Loading records.</p><span>Fetching from Prisma and local MySQL.</span></div>
+        ) : records.length === 0 ? (
+          <div className="empty-state"><p>No saved numbers found.</p><span>Add your first number to save it in MySQL.</span></div>
         ) : (
           <>
             <div className="table-wrap">
@@ -577,40 +392,29 @@ export default function Home() {
                   <tr>
                     <th>No</th>
                     <th>Name</th>
-                    <th>DOB</th>
-                    <th>Phone Number</th>
-                    <th>Renewal Date</th>
-                    <th>PDF</th>
-                    <th>Action</th>
+                    <th>Number</th>
+                    <th>Registration</th>
+                    <th>Insurance</th>
+                    <th>Birthday</th>
+                    <th>Notes</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleDetails.map((detail, index) => (
-                    <tr key={detail.id}>
-                      <td>{pageStart + index + 1}</td>
+                  {records.map((record, index) => (
+                    <tr key={record.id}>
+                      <td>{(pagination.page - 1) * pagination.pageSize + index + 1}</td>
+                      <td><strong>{record.name}</strong></td>
+                      <td><a className="number-link" href={`tel:${record.phoneNumber}`}>{record.phoneNumber}</a></td>
+                      <td>{formatDisplayDate(record.registrationDate)}</td>
+                      <td><span className="date-pill insurance-pill">{formatDisplayDate(record.insuranceDate)}</span></td>
+                      <td><span className="date-pill birthday-pill">{formatDisplayDate(record.birthday)}</span></td>
+                      <td>{record.notes || "-"}</td>
                       <td>
-                        <strong>{detail.name}</strong>
-                      </td>
-                      <td>{formatDisplayDate(detail.dob)}</td>
-                      <td>{detail.phone}</td>
-                      <td>
-                        <span className="renewal-date">{formatDisplayDate(detail.renewalDate)}</span>
-                      </td>
-                      <td>
-                        <a
-                          className="pdf-link"
-                          href={detail.pdfUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          View PDF
-                        </a>
-                        <span className="pdf-name">{detail.pdfName}</span>
-                      </td>
-                      <td>
-                        <button className="table-button" type="button" onClick={() => startEdit(detail)}>
-                          Edit
-                        </button>
+                        <div className="row-actions">
+                          <button className="table-button" type="button" onClick={() => startEdit(record)}>Edit</button>
+                          <button className="danger-button" type="button" onClick={() => void deleteRecord(record)}>Delete</button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -619,26 +423,10 @@ export default function Home() {
             </div>
 
             <div className="pagination">
-              <span>
-                Page {safePage} of {totalPages}
-              </span>
+              <span>Page {pagination.page} of {pagination.totalPages}</span>
               <div className="page-actions">
-                <button
-                  className="ghost-button"
-                  type="button"
-                  onClick={() => setPage((currentPage) => Math.max(1, currentPage - 1))}
-                  disabled={safePage === 1}
-                >
-                  Previous
-                </button>
-                <button
-                  className="ghost-button"
-                  type="button"
-                  onClick={() => setPage((currentPage) => Math.min(totalPages, currentPage + 1))}
-                  disabled={safePage === totalPages}
-                >
-                  Next
-                </button>
+                <button className="ghost-button" type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={pagination.page <= 1}>Previous</button>
+                <button className="ghost-button" type="button" onClick={() => setPage((current) => Math.min(pagination.totalPages, current + 1))} disabled={pagination.page >= pagination.totalPages}>Next</button>
               </div>
             </div>
           </>

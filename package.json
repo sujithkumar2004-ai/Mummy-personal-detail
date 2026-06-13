@@ -1,18 +1,19 @@
 {
-  "name": "mummy-personal-detail",
+  "name": "number-saving-platform",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.107.0",
-    "@types/pg": "^8.20.0",
+    "@prisma/client": "^6.19.3",
+    "mysql2": "^3.22.5",
     "next": "latest",
-    "pg": "^8.21.0",
+    "prisma": "^6.19.3",
     "react": "latest",
     "react-dom": "latest"
   },

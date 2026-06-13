@@ -1,110 +1,77 @@
-import { Pool } from "pg";
+import { PrismaClient, SavedNumber } from "@prisma/client";
 
-const rawConnectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+const globalForPrisma = globalThis as unknown as {
+  prisma?: PrismaClient;
+};
 
-if (!rawConnectionString) {
-  throw new Error("POSTGRES_URL or DATABASE_URL is required");
+export const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"]
+  });
+
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
 }
 
-const connectionUrl = new URL(rawConnectionString);
-connectionUrl.searchParams.delete("sslmode");
-connectionUrl.searchParams.delete("sslcert");
-connectionUrl.searchParams.delete("sslkey");
-connectionUrl.searchParams.delete("sslrootcert");
-const connectionString = connectionUrl.toString();
-
-let pool: Pool | null = null;
-let initialized = false;
-
-export type DetailRow = {
-  id: string | number;
+export type SavedNumberPayload = {
   name: string;
-  dob: string;
-  phone: string;
-  renewal_date: string;
-  pdf_name: string;
-  pdf_type: string;
-  pdf_path: string;
-  created_at: Date;
-  updated_at: Date;
+  phoneNumber: string;
+  registrationDate: string;
+  insuranceDate: string;
+  birthday: string;
+  notes: string;
 };
 
-export type PdfRow = {
-  pdf_name: string;
-  pdf_type: string;
-  pdf_path: string;
-};
-
-export function getPool() {
-  if (!pool) {
-    pool = new Pool({
-      connectionString,
-      ssl: {
-        rejectUnauthorized: false
-      }
-    });
+export function toDate(value: string, fieldName: string) {
+  if (!value || Number.isNaN(Date.parse(value))) {
+    throw new Error(`${fieldName} is required`);
   }
 
-  return pool;
+  return new Date(`${value}T00:00:00.000Z`);
 }
 
-export async function ensureSchema() {
-  if (initialized) {
-    return;
+export function requireText(payload: Record<string, unknown>, key: string) {
+  const value = payload[key];
+
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${key} is required`);
   }
 
-  await getPool().query(`
-    CREATE TABLE IF NOT EXISTS personal_details (
-      id BIGSERIAL PRIMARY KEY,
-      name VARCHAR(255) NOT NULL,
-      dob DATE NOT NULL,
-      phone VARCHAR(64) NOT NULL,
-      renewal_date DATE NOT NULL,
-      pdf_name VARCHAR(255) NOT NULL,
-      pdf_type VARCHAR(120) NOT NULL,
-      pdf_path TEXT,
-      pdf_data BYTEA,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
-    ALTER TABLE personal_details ADD COLUMN IF NOT EXISTS pdf_path TEXT;
-    ALTER TABLE personal_details ALTER COLUMN pdf_data DROP NOT NULL;
-
-    CREATE INDEX IF NOT EXISTS idx_personal_details_name ON personal_details (name);
-    CREATE INDEX IF NOT EXISTS idx_personal_details_phone ON personal_details (phone);
-    CREATE INDEX IF NOT EXISTS idx_personal_details_dob ON personal_details (dob);
-    CREATE INDEX IF NOT EXISTS idx_personal_details_renewal_date ON personal_details (renewal_date);
-  `);
-
-  initialized = true;
+  return value.trim();
 }
 
-export const detailSelect = `
-  SELECT
-    id,
-    name,
-    TO_CHAR(dob, 'YYYY-MM-DD') AS dob,
-    phone,
-    TO_CHAR(renewal_date, 'YYYY-MM-DD') AS renewal_date,
-    pdf_name,
-    pdf_type,
-    pdf_path,
-    created_at,
-    updated_at
-  FROM personal_details
-`;
+export function optionalText(payload: Record<string, unknown>, key: string) {
+  const value = payload[key];
 
-export function serializeDetail(row: DetailRow) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export function readSavedNumberPayload(payload: Record<string, unknown>): SavedNumberPayload {
   return {
-    id: Number(row.id),
-    name: row.name,
-    dob: row.dob,
-    phone: row.phone,
-    renewalDate: row.renewal_date,
-    pdfName: row.pdf_name,
-    pdfUrl: `/api/details/${row.id}/pdf`,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
+    name: requireText(payload, "name"),
+    phoneNumber: requireText(payload, "phoneNumber"),
+    registrationDate: requireText(payload, "registrationDate"),
+    insuranceDate: requireText(payload, "insuranceDate"),
+    birthday: requireText(payload, "birthday"),
+    notes: optionalText(payload, "notes")
+  };
+}
+
+function formatDate(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+export function serializeSavedNumber(record: SavedNumber) {
+  return {
+    id: record.id,
+    name: record.name,
+    phoneNumber: record.phoneNumber,
+    registrationDate: formatDate(record.registrationDate),
+    insuranceDate: formatDate(record.insuranceDate),
+    birthday: formatDate(record.birthday),
+    notes: record.notes ?? "",
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString()
   };
 }
